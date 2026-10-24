@@ -18,15 +18,54 @@ the background and blocks or skips ads.
 - **Anti-adblock popup**: removes the "Ad blockers violate terms" dialog and
   resumes the video.
 
-## Install
+## Usage
 
-The script must run in the page context. It declares `@inject-into page` and
-`@run-at document-start`.
+The script runs through [Userscripts](https://github.com/quoid/userscripts),
+a free, open-source Safari extension for iOS and macOS. The script needs page
+access, so it sets `@inject-into page` and `@run-at document-start`.
 
-- **iOS / macOS Safari**: install the [Userscripts](https://github.com/quoid/userscripts)
-  app, then copy `userscripts.js` into its scripts folder.
-- **Tampermonkey**: create a new script and paste the contents of
-  `userscripts.js`. Tampermonkey ignores `@inject-into`.
+### 1. Install the Userscripts extension
+
+**iOS / iPadOS**
+
+1. Install **Userscripts** from the App Store.
+2. Open the Userscripts app and tap **Set Userscripts Directory**. Pick or
+   create a folder, for example `Userscripts` in iCloud Drive or
+   On My iPhone.
+3. Go to **Settings → Apps → Safari → Extensions → Userscripts** (on iOS 17
+   and earlier: **Settings → Safari → Extensions**). Turn it on, and set
+   **All Websites** or at least `youtube.com` to **Allow**.
+
+**macOS**
+
+1. Install **Userscripts** from the Mac App Store.
+2. Open the Userscripts app and click **Change Userscripts Directory** to
+   pick a folder.
+3. In Safari, go to **Settings → Extensions**, enable **Userscripts**, and
+   allow it on `youtube.com`.
+
+### 2. Add this script
+
+Copy `userscripts.js` into the Userscripts directory you picked, using the
+Files app on iOS or Finder on macOS. In Safari, open the extensions menu (the
+puzzle-piece icon, or **aA** in the iOS address bar), tap **Userscripts**, and
+check that **YouTube Safari: Background Play & Ad Skipper** is listed and
+enabled.
+
+### 3. Use it
+
+1. Open `youtube.com` (or `m.youtube.com`) in Safari and play a video.
+   Reload the page if YouTube was already open before you added the script.
+2. Switch to another app or lock the screen. Audio keeps playing, and you can
+   control it from Control Center or the lock screen.
+3. Ads are blocked when possible. Ads that still appear are muted, sped up
+   and skipped.
+
+To update the script, replace the file in the Userscripts directory and
+reload YouTube.
+
+**Tampermonkey** (other browsers): create a new script and paste in the
+contents of `userscripts.js`. Tampermonkey ignores `@inject-into`.
 
 ## Debug options
 

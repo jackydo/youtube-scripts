@@ -69,7 +69,7 @@
     // DEBUG_LOG shows an on-screen log (also saved in localStorage so it survives reloads).
     // TRY_RESUME makes ONE play() attempt after iOS pauses on backgrounding.
     // If Control Center play breaks again, set TRY_RESUME to false.
-    const DEBUG_LOG = true;
+    const DEBUG_LOG = false;
     const TRY_RESUME = true;
     const RESUME_WINDOW_MS = 1500; // pause must land this close to the background switch
     const RESUME_DELAY_MS = 1000;  // wait for the switch to finish before calling play()
