@@ -19,7 +19,10 @@
     // Removes ad schedules before the player reads them, so most ads never load.
     const AD_KEYS = ['adPlacements', 'adSlots', 'playerAds', 'adBreakHeartbeatParams'];
     const stripAds = obj => {
-        if (obj && typeof obj === 'object') {
+        if (Array.isArray(obj)) {
+            // Desktop page navigations can return an array of response parts
+            obj.forEach(stripAds);
+        } else if (obj && typeof obj === 'object') {
             AD_KEYS.forEach(key => { if (key in obj) delete obj[key]; });
             if (obj.playerResponse) stripAds(obj.playerResponse);
         }
@@ -36,13 +39,24 @@
         return origJson.call(this).then(stripAds);
     };
 
-    // Initial page load embeds the player response as an inline object literal
-    let initialPlayerResponse;
-    Object.defineProperty(window, 'ytInitialPlayerResponse', {
-        configurable: true,
-        get: () => initialPlayerResponse,
-        set: value => { initialPlayerResponse = stripAds(value); }
-    });
+    // Initial page load embeds the player response as an inline object literal.
+    // Userscripts can inject after YouTube's `var ytInitialPlayerResponse` already ran;
+    // that global is then non-configurable and defineProperty throws, which used to
+    // abort the whole script. Strip the existing object in place instead.
+    if ('ytInitialPlayerResponse' in window) {
+        stripAds(window.ytInitialPlayerResponse);
+    } else {
+        let initialPlayerResponse;
+        try {
+            Object.defineProperty(window, 'ytInitialPlayerResponse', {
+                configurable: true,
+                get: () => initialPlayerResponse,
+                set: value => { initialPlayerResponse = stripAds(value); }
+            });
+        } catch (e) {
+            // Never let this stop the rest of the script
+        }
+    }
 
     // ----------------------------------------------------
     // 1. BACKGROUND PLAY (Spoof Visibility)
@@ -99,16 +113,25 @@
         renderLog();
     };
 
+    const createLogPanel = () => {
+        logPanel = document.createElement('pre');
+        logPanel.style.cssText = 'position:fixed;left:4px;bottom:4px;z-index:2147483647;' +
+            'max-width:75vw;max-height:30vh;overflow:hidden;margin:0;padding:4px;' +
+            'font:10px/1.3 monospace;color:#0f0;background:rgba(0,0,0,.75);' +
+            'pointer-events:none;white-space:pre-wrap;';
+        document.documentElement.appendChild(logPanel);
+        renderLog();
+    };
+
     if (DEBUG_LOG) {
-        document.addEventListener('DOMContentLoaded', () => {
-            logPanel = document.createElement('pre');
-            logPanel.style.cssText = 'position:fixed;left:4px;bottom:4px;z-index:2147483647;' +
-                'max-width:75vw;max-height:30vh;overflow:hidden;margin:0;padding:4px;' +
-                'font:10px/1.3 monospace;color:#0f0;background:rgba(0,0,0,.75);' +
-                'pointer-events:none;white-space:pre-wrap;';
-            document.documentElement.appendChild(logPanel);
-            log('--- page loaded ---');
-        });
+        // Shows whether the script was injected late (readyState not "loading")
+        log(`--- script start: ${location.host}, readyState=${document.readyState} ---`);
+        // Userscripts can inject after DOMContentLoaded, so don't rely on that event alone
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', createLogPanel);
+        } else {
+            createLogPanel();
+        }
     }
 
     let backgroundedAt = 0;
@@ -161,6 +184,53 @@
         }, true);
     });
 
+    // ----------------------------------------------------
+    // 1c. CONTROL CENTER PLAY/PAUSE
+    // ----------------------------------------------------
+    // The desktop site (default on iPadOS) registers its own Media Session play/pause
+    // handlers, which don't resume playback in the background. Control the <video>
+    // directly instead, as Safari does when no handler is set (m.youtube.com on iPhone).
+    const getMainVideo = () => document.querySelector('video.html5-main-video') || document.querySelector('video');
+
+    if ('mediaSession' in navigator) {
+        const session = navigator.mediaSession;
+        const origSetActionHandler = session.setActionHandler.bind(session);
+        const ownHandlers = {
+            play: () => {
+                const video = getMainVideo();
+                log(`mediaSession play (video ${video ? 'found' : 'missing'})`);
+                if (video) {
+                    video.play().then(
+                        () => log('play() ok'),
+                        err => log(`play() rejected: ${err.name}`)
+                    );
+                }
+            },
+            pause: () => {
+                log('mediaSession pause');
+                const video = getMainVideo();
+                if (video) video.pause();
+            }
+        };
+
+        const blockedLogged = new Set();
+        session.setActionHandler = (action, handler) => {
+            if (action in ownHandlers) {
+                if (!blockedLogged.has(action)) {
+                    blockedLogged.add(action);
+                    log(`kept own mediaSession ${action} handler`);
+                }
+                return;
+            }
+            return origSetActionHandler(action, handler);
+        };
+
+        // Also replaces any handlers YouTube set before a late injection
+        Object.entries(ownHandlers).forEach(([action, handler]) => {
+            try { origSetActionHandler(action, handler); } catch (e) {}
+        });
+    }
+
     // Block the events that trigger video pausing
     const blockEvents = ['visibilitychange', 'webkitvisibilitychange', 'pagehide', 'blur'];
     blockEvents.forEach(evt => {
@@ -172,30 +242,36 @@
     // 2. AD BLOCKING & AUTO-SKIPPING
     // ----------------------------------------------------
     // Ads and content share one <video>, so remember what we changed and restore it
-    let mutedByScript = false;
+    let mutedVideo = null;
     let savedRate = 1;
 
     const handleVideoAd = () => {
-        const player = document.querySelector('.html5-video-player');
-        const video = player && player.querySelector('video');
-        if (!video) return;
+        // The desktop site has several players (e.g. home-page hover previews),
+        // so look for the one showing an ad rather than the first one in the page
+        const adPlayer = document.querySelector('.html5-video-player.ad-showing');
+        const adVideo = adPlayer && adPlayer.querySelector('video');
 
-        if (player.classList.contains('ad-showing')) {
+        if (adVideo) {
             // Mute immediately, without waiting for duration to be known
-            if (!mutedByScript) {
-                savedRate = video.playbackRate;
-                mutedByScript = true;
+            if (mutedVideo !== adVideo) {
+                if (!mutedVideo) savedRate = adVideo.playbackRate;
+                mutedVideo = adVideo;
+                log('ad detected: muting');
             }
-            video.muted = true;
-            video.playbackRate = 16;
-            if (isFinite(video.duration)) video.currentTime = video.duration - 0.1;
+            adVideo.muted = true;
+            adVideo.playbackRate = 16;
+            if (isFinite(adVideo.duration)) adVideo.currentTime = adVideo.duration - 0.1;
 
-            const skipBtn = document.querySelector('.ytp-ad-skip-button, .ytp-ad-skip-button-modern, .ytp-skip-ad-button');
+            const skipBtn = adPlayer.querySelector(
+                '.ytp-ad-skip-button, .ytp-ad-skip-button-modern, .ytp-skip-ad-button, ' +
+                '.ytp-ad-skip-button-container button, .ytp-skip-ad button'
+            );
             if (skipBtn) skipBtn.click();
-        } else if (mutedByScript) {
-            video.muted = false;
-            video.playbackRate = savedRate;
-            mutedByScript = false;
+        } else if (mutedVideo) {
+            mutedVideo.muted = false;
+            mutedVideo.playbackRate = savedRate;
+            mutedVideo = null;
+            log('ad ended: unmuted');
         }
     };
 
